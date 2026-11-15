@@ -14,6 +14,7 @@ from trident.segmentation_models import segmentation_model_factory
 from trident.patch_encoder_models import encoder_factory
 from trident.patch_encoder_models import encoder_registry as patch_encoder_registry
 from trident.Summary import start_run, finalize_run
+from trident.Timing import timed_stage, register_device
 
 
 def parse_arguments():
@@ -77,7 +78,7 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def process_slide(args):
+def process_slide(args, timing_run_id=None):
     """
     Process a single WSI by performing segmentation, patch extraction, and feature extraction sequentially.
     """
@@ -100,21 +101,22 @@ def process_slide(args):
         else:
             artifact_remover_model = None
 
-        slide.segment_tissue(
-            segmentation_model=segmentation_model,
-            target_mag=segmentation_model.target_mag,
-            job_dir=args.job_dir,
-            device=seg_device,
-            holes_are_tissue=not args.remove_holes
-        )
-        # additionally remove artifacts for better segmentation.
-        if artifact_remover_model is not None:
+        with timed_stage(timing_run_id, slide.name + slide.ext, "segmentation", device=seg_device):
             slide.segment_tissue(
-                segmentation_model=artifact_remover_model,
-                target_mag=artifact_remover_model.target_mag,
-                holes_are_tissue=False,
-                job_dir=args.job_dir
+                segmentation_model=segmentation_model,
+                target_mag=segmentation_model.target_mag,
+                job_dir=args.job_dir,
+                device=seg_device,
+                holes_are_tissue=not args.remove_holes
             )
+            # additionally remove artifacts for better segmentation.
+            if artifact_remover_model is not None:
+                slide.segment_tissue(
+                    segmentation_model=artifact_remover_model,
+                    target_mag=artifact_remover_model.target_mag,
+                    holes_are_tissue=False,
+                    job_dir=args.job_dir
+                )
         print(f"Tissue segmentation completed. Results saved to {os.path.join(args.job_dir, 'contours_geojson')} and {os.path.join(args.job_dir, 'contours')}")
 
         # Step 2: Tissue Coordinate Extraction (Patching)
@@ -122,11 +124,12 @@ def process_slide(args):
         mag_str = f"{float(args.mag):g}"
         save_coords = os.path.join(args.job_dir, f'{mag_str}x_{args.patch_size}px_{args.overlap}px_overlap')
 
-        coords_path = slide.extract_tissue_coords(
+        with timed_stage(timing_run_id, slide.name + slide.ext, "coords", scope=save_coords, device="cpu"):
+            coords_path = slide.extract_tissue_coords(
             target_mag=args.mag,
             patch_size=args.patch_size,
             save_coords=save_coords
-        )
+            )
         print(f"Tissue coordinates extracted and saved to {coords_path}.")
 
         if getattr(args, "dump_patches", False):
@@ -162,23 +165,32 @@ def process_slide(args):
         encoder.eval()
         encoder.to(f"cuda:{args.gpu}")
         features_path = features_dir = os.path.join(save_coords, "features_{}".format(args.patch_encoder))
-        slide.extract_patch_features(
+        patch_count = None
+        try:
+            import h5py
+            with h5py.File(os.path.join(save_coords, 'patches', f'{slide.name}_patches.h5'), 'r') as coords_h5:
+                patch_count = int(coords_h5['coords'].shape[0])
+        except Exception:
+            pass
+        with timed_stage(timing_run_id, slide.name + slide.ext, "patch_features", scope=f"{args.patch_encoder}:{save_coords}", device=f"cuda:{args.gpu}", patch_count=patch_count):
+            slide.extract_patch_features(
             patch_encoder=encoder,
             coords_path=os.path.join(save_coords, 'patches', f'{slide.name}_patches.h5'),
             save_features=features_dir,
             device=f"cuda:{args.gpu}",
             batch_limit=args.batch_size
-        )
+            )
         print(f"Feature extraction completed. Results saved to {features_path}")
 
 
 def main():
     args = parse_arguments()
     run_id = start_run(args.job_dir, tool="run_single_slide", args=vars(args))
+    register_device(run_id, f"cuda:{args.gpu}")
     run_status = "completed"
     run_error = None
     try:
-        process_slide(args)
+        process_slide(args, timing_run_id=run_id)
     except Exception as e:
         run_status = "error"
         run_error = str(e)

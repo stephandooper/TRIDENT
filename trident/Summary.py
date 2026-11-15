@@ -8,6 +8,7 @@ import uuid
 from typing import Any, Dict, Optional, Tuple
 
 from trident.State import load_all_states, atomic_write_json
+from trident.Timing import create_report, get_report, register_device
 
 
 def _now_iso() -> str:
@@ -78,6 +79,7 @@ def start_run(
         "args": args_safe,
     }
     atomic_write_json(manifest_path, manifest)
+    create_report(job_dir, run_id, backend="trident", settings=args_safe)
     return run_id
 
 
@@ -240,6 +242,12 @@ def finalize_run(
     manifest["error"] = error
     manifest.setdefault("trident_version", _trident_version())
     atomic_write_json(manifest_path, manifest)
+    report = get_report(run_id)
+    if report is not None:
+        try:
+            report.finalize(status=status)
+        except Exception:
+            pass
 
     # Render and append a new section to summary.md
     num_slides, task_counts, grouped_counts, errors = _aggregate_states(job_dir)

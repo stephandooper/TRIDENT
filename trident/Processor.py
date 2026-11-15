@@ -20,6 +20,7 @@ from trident.wsi_objects.WSIFactory import (
     OMEZARR_EXTENSIONS,
     CZI_EXTENSIONS,
 )
+from trident.Timing import record_stage, register_device
 
 
 class Processor:
@@ -209,6 +210,9 @@ class Processor:
             stack.close()
             raise
         self._wsi_stack = stack
+        self.timing_run_id = None
+        self.timing_device = None
+        self._timing_started = {}
 
     def _record_outcome(
         self,
@@ -236,6 +240,41 @@ class Processor:
                 contention, where writing to the shared log would clobber the
                 owning worker's entry. State updates are best-effort and never raise.
         """
+        # Timing is supplementary. Keep a monotonic clock per active slide/task
+        # and report all terminal outcomes, including failures that are re-raised.
+        timing_key = (slide_ref.get("name"), task)
+        if status == "running":
+            register_device(self.timing_run_id, self.timing_device)
+            self._timing_started[timing_key] = time.monotonic()
+        elif status in {"completed", "error", "skipped"}:
+            started = self._timing_started.pop(timing_key, None)
+            family, _, scope = task.partition(":")
+            stage = {
+                "segmentation": "segmentation",
+                "coords": "coords",
+                "patch_features": "patch_features",
+                "slide_features": "slide_features",
+            }.get(family, family)
+            patch_count = None
+            if stage in {"coords", "patch_features", "slide_features"}:
+                try:
+                    import h5py
+                    coord_fp = (outputs or {}).get("coords_h5") or (outputs or {}).get("coords_path")
+                    if coord_fp and os.path.isfile(coord_fp):
+                        with h5py.File(coord_fp, "r") as h5:
+                            for key in ("coords", "coordinates"):
+                                if key in h5:
+                                    patch_count = int(h5[key].shape[0])
+                                    break
+                except Exception:
+                    pass
+            record_stage(
+                self.timing_run_id, f"{slide_ref.get('name', '')}{slide_ref.get('ext', '')}",
+                stage, status, started, scope=scope,
+                patch_count=patch_count,
+                extra={"reason": reason} if reason else None,
+                device=self.timing_device,
+            )
         if write_log:
             update_log(log_fp, f"{slide_ref['name']}{slide_ref['ext']}", message)
         try:
@@ -294,6 +333,7 @@ class Processor:
         >>> model = TissueSegmenter()
         >>> processor.run_segmentation_job(segmentation_model=model, seg_mag=20)
         """
+        self.timing_device = device
         saveto = os.path.join(self.job_dir, 'contours')
         os.makedirs(saveto, exist_ok=True)
 
@@ -446,14 +486,14 @@ class Processor:
                     wsi.release()
                 except Exception:
                     pass
+                self._record_outcome(
+                    os.path.join(self.job_dir, '_logs_segmentation.txt'),
+                    slide_ref, "segmentation", "error",
+                    f"ERROR: {e}",
+                    attempt=make_attempt("error", error=str(e)),
+                    wsi_meta=wsi_meta,
+                )
                 if self.skip_errors:
-                    self._record_outcome(
-                        os.path.join(self.job_dir, '_logs_segmentation.txt'),
-                        slide_ref, "segmentation", "error",
-                        f"ERROR: {e}",
-                        attempt=make_attempt("error", error=str(e)),
-                        wsi_meta=wsi_meta,
-                    )
                     continue
                 else:
                     raise e
@@ -517,6 +557,7 @@ class Processor:
         ...     saveto="output/patches/"
         ... )
         """
+        self.timing_device = "cpu"
         def _fmt_mag(mag: float) -> str:
             try:
                 m = float(mag)
@@ -693,14 +734,14 @@ class Processor:
                     wsi.release()
                 except Exception:
                     pass
+                self._record_outcome(
+                    os.path.join(self.job_dir, saveto, '_logs_coords.txt'),
+                    slide_ref, coords_task, "error",
+                    f"ERROR: {e}",
+                    attempt=make_attempt("error", error=str(e)),
+                    wsi_meta=wsi_meta,
+                )
                 if self.skip_errors:
-                    self._record_outcome(
-                        os.path.join(self.job_dir, saveto, '_logs_coords.txt'),
-                        slide_ref, coords_task, "error",
-                        f"ERROR: {e}",
-                        attempt=make_attempt("error", error=str(e)),
-                        wsi_meta=wsi_meta,
-                    )
                     continue
                 else:
                     raise e
@@ -771,6 +812,7 @@ class Processor:
         ...     device="cuda:0"
         ... )
         """
+        self.timing_device = device
         if saveto is None:
             saveto = os.path.join(coords_dir, f'features_{patch_encoder.enc_name}')
 
@@ -883,13 +925,13 @@ class Processor:
                     wsi.release()
                 except Exception:
                     pass
+                self._record_outcome(
+                    log_fp, slide_ref, feat_task, "error",
+                    f"ERROR: {e}",
+                    attempt=make_attempt("error", error=str(e)),
+                    wsi_meta=wsi_meta,
+                )
                 if self.skip_errors:
-                    self._record_outcome(
-                        log_fp, slide_ref, feat_task, "error",
-                        f"ERROR: {e}",
-                        attempt=make_attempt("error", error=str(e)),
-                        wsi_meta=wsi_meta,
-                    )
                     continue
                 else:
                     raise e
@@ -946,6 +988,7 @@ class Processor:
             Exception: Propagates exceptions unless `self.skip_errors` is set to True.
 
         """
+        self.timing_device = device
         from trident.slide_encoder_models.load import slide_to_patch_encoder_name
         
         if slide_encoder.enc_name.startswith('mean-'):
@@ -1086,13 +1129,13 @@ class Processor:
                     wsi.release()
                 except Exception:
                     pass
+                self._record_outcome(
+                    slide_feat_log_fp, slide_ref, slide_feat_task, "error",
+                    f"ERROR: {e}",
+                    attempt=make_attempt("error", error=str(e)),
+                    wsi_meta=wsi_meta,
+                )
                 if self.skip_errors:
-                    self._record_outcome(
-                        slide_feat_log_fp, slide_ref, slide_feat_task, "error",
-                        f"ERROR: {e}",
-                        attempt=make_attempt("error", error=str(e)),
-                        wsi_meta=wsi_meta,
-                    )
                     continue
                 else:
                     raise e

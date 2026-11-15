@@ -24,6 +24,7 @@ from trident.slide_encoder_models import encoder_registry as slide_encoder_regis
 from trident.Concurrency import batch_producer, batch_consumer
 from trident.IO import collect_valid_slides
 from trident.Summary import start_run, finalize_run
+from trident.Timing import create_report, register_device, record_stage
 
 
 def _pick_mp_context() -> mp.context.BaseContext:
@@ -433,17 +434,32 @@ def get_pending_slides(args: argparse.Namespace) -> List[str]:
     for slide_path in all_slides:
         stem = os.path.splitext(os.path.basename(slide_path))[0]
         is_done = True
+        completed = {}
 
         for task_name in tasks:
-            if task_name == 'seg' and stem not in seg_done:
-                is_done = False
-            elif task_name == 'coords' and stem not in coords_done:
-                is_done = False
-            elif task_name == 'feat' and stem not in feat_done:
+            done = ((task_name == 'seg' and stem in seg_done)
+                    or (task_name == 'coords' and stem in coords_done)
+                    or (task_name == 'feat' and stem in feat_done))
+            completed[task_name] = done
+            if not done:
                 is_done = False
 
-            if not is_done:
-                break
+        # Slides screened out before worker creation still contribute cached
+        # outcomes to the run report, including partially cached stages.
+        slide = os.path.basename(slide_path)
+        for task_name, done in completed.items():
+            if not done:
+                continue
+            if task_name == 'seg':
+                stage, scope = 'segmentation', ''
+            elif task_name == 'coords':
+                stage, scope = 'coords', coords_dir
+            elif args.slide_encoder:
+                stage, scope = 'slide_features', f'{args.slide_encoder}:{coords_dir}'
+            else:
+                stage, scope = 'patch_features', f'{args.patch_encoder}:{coords_dir}'
+            record_stage(getattr(args, 'timing_run_id', None), slide, stage, 'cached',
+                         scope=scope, extra={'reason': 'already_extracted'})
 
         if not is_done:
             pending.append(slide_path)
@@ -511,7 +527,11 @@ def worker_entrypoint(args: argparse.Namespace) -> None:
                     pd.DataFrame(rows).to_csv(batch_csv, index=False)
                     local_args.custom_list_of_wsis = batch_csv
 
-            return initialize_processor(local_args)
+            processor = initialize_processor(local_args)
+            processor.timing_run_id = getattr(args, "timing_run_id", None)
+            processor.timing_device = getattr(args, "device", None)
+            create_report(args.job_dir, processor.timing_run_id, backend="trident", settings=vars(args)) if processor.timing_run_id else None
+            return processor
 
         def run_task_fn(processor: Processor, task_name: str) -> None:
             local_args = argparse.Namespace(**vars(args))
@@ -535,6 +555,11 @@ def worker_entrypoint(args: argparse.Namespace) -> None:
         return
 
     processor = initialize_processor(args)
+    processor.timing_run_id = getattr(args, "timing_run_id", None)
+    processor.timing_device = getattr(args, "device", None)
+    if processor.timing_run_id:
+        create_report(args.job_dir, processor.timing_run_id, backend="trident", settings=vars(args))
+        register_device(processor.timing_run_id, processor.timing_device)
     tasks = ['seg', 'coords', 'feat'] if args.task == 'all' else [args.task]
 
     try:
@@ -581,6 +606,7 @@ def main() -> None:
         gpu_ids = [-1]
 
     run_id = start_run(args.job_dir, tool="run_batch_of_slides", args=vars(args))
+    args.timing_run_id = run_id
     run_status = "completed"
     run_error = None
 
@@ -599,6 +625,7 @@ def main() -> None:
             worker_args.gpu = gpu_ids[0]
             worker_args.device = f"cuda:{gpu_ids[0]}" if gpu_ids[0] >= 0 else "cpu"
             worker_args.selected_wsi_paths = shards[0]
+            worker_args.timing_run_id = run_id
             worker_entrypoint(worker_args)
             return
 
@@ -613,6 +640,7 @@ def main() -> None:
             worker_args.gpu = gpu_id
             worker_args.device = f"cuda:{gpu_id}" if gpu_id >= 0 else "cpu"
             worker_args.selected_wsi_paths = shards[shard_idx]
+            worker_args.timing_run_id = run_id
 
             process = ctx.Process(target=worker_entrypoint, args=(worker_args,))
             process.start()
