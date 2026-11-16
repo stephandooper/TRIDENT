@@ -1,125 +1,92 @@
-[tool.poetry]
+[project]
 name = "trident"
 version = "0.3.2"
 description = "A package for preprocessing whole-slide images."
 authors = [
-    "Guillaume Jaume <guillaume.jaume@unil.ch>",
-    "Andrew Zhang <andrewzh@mit.edu>",
-    "Paul Doucet <homedoucetpaul@gmail.com>"
+    { name = "Guillaume Jaume", email = "guillaume.jaume@unil.ch" },
+    { name = "Andrew Zhang", email = "andrewzh@mit.edu" },
+    { name = "Paul Doucet", email = "homedoucetpaul@gmail.com" },
 ]
-license = "CC BY-NC-ND 4.0"  
-repository = "https://github.com/mahmoodlab/TRIDENT"
+license = "CC-BY-NC-ND-4.0"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "ipywidgets",
+    "torch",
+    "torchvision",
+    "numpy",
+    "pandas",
+    "tqdm",
+    "h5py",
+    "matplotlib",
+    "opencv-python",
+    "scikit-image>=0.20",
+    "openslide-python",
+    "Pillow",
+    "geopandas",
+    "shapely",
+    "requests",
+    "huggingface-hub",
+    "bioio",
+    "bioio-ome-tiff",
+    "bioio-tifffile",
+    "pyvips",
+    "transformers>=4.51,<5",
+    "timm>=0.9.16,<2",
+    "einops",
+    "einops-exts",
+    "scipy",
+    "segmentation-models-pytorch",
+    "safetensors",
+]
 
-[tool.poetry.dependencies]
-python = ">=3.10,<3.13"  # Support Python 3.10, 3.11, and 3.12.
-ipywidgets = "*"
-torch = "*"
-torchvision = "*"
-numpy = "*"
-pandas = "*"
-tqdm = "*"
-h5py = "*"
-matplotlib = "*"
-opencv-python = "*"
-scikit-image = ">=0.20"
-openslide-python = "*"
-Pillow = "*"
-geopandas = "*"
-shapely = "*"
-requests = "*"
-huggingface_hub = "*"
-openslide-bin = "*"
-bioio = "*"
-bioio-ome-tiff = "*"
-bioio-tifffile = "*"
-pyvips = "*"
-
-# Core model dependencies (installed with `pip install -e .`)
-transformers = ">=4.51,<5"
-timm = ">=0.9.16,<2"
-einops = "*"
-einops_exts = "*"
-
-scipy = "*"
-segmentation-models-pytorch = "*"
-safetensors = "*"
-
-# Optional dependencies
-environs = { version = "11.0.0", optional = true }
-sacremoses = { version = "0.1.1", optional = true }
-fairscale = { version = "*", optional = true }
-timm_ctp = { version = "*", optional = true }
-conch = { git = "https://github.com/Mahmoodlab/CONCH.git", optional = true }
-musk = { git = "https://github.com/lilab-stanford/MUSK", optional = true }
-gigapath = { git = "https://github.com/prov-gigapath/prov-gigapath.git", optional = true }
-madeleine = { git = "https://github.com/mahmoodlab/MADELEINE.git", optional = true }
-pylibCZIrw = { version = "*", optional = true }
-bioio-bioformats = { version = "*", optional = true }
-cf-units = { version = ">=3.1", optional = true }
-ngff-zarr = { version = ">=0.12", optional = true }
-zarr = { version = ">=3.0.0a0", optional = true }
-dask = { version = ">=2024.10", optional = true }
-
-[tool.poetry.extras]
+[project.optional-dependencies]
+openslide-binary = ["openslide-bin"]
 patch-encoders = [
     "fairscale",
-    "timm_ctp",
-    "conch",
-    "musk",
+    "timm-ctp",
+    "conch @ git+https://github.com/Mahmoodlab/CONCH.git",
+    "musk @ git+https://github.com/lilab-stanford/MUSK",
 ]
 slide-encoders = [
-    "environs",
-    "sacremoses",
-    "gigapath",
-    "madeleine",
+    "environs==11.0.0",
+    "sacremoses==0.1.1",
+    "gigapath @ git+https://github.com/prov-gigapath/prov-gigapath.git",
+    "madeleine @ git+https://github.com/mahmoodlab/MADELEINE.git",
 ]
-converter = [
-    "pylibCZIrw",
-]
-convert = [
-    "pylibCZIrw",
-]
-czi = [
-    "pylibCZIrw",
-]
-bioformats = [
-    "bioio-bioformats",
-]
+converter = ["pylibCZIrw"]
+convert = ["pylibCZIrw"]
+czi = ["pylibCZIrw"]
+bioformats = ["bioio-bioformats"]
 full = [
-    "environs",
-    "sacremoses",
+    "environs==11.0.0",
+    "sacremoses==0.1.1",
     "fairscale",
-    "timm_ctp",
-    "conch",
-    "musk",
-    "gigapath",
-    "madeleine",
+    "timm-ctp",
+    "conch @ git+https://github.com/Mahmoodlab/CONCH.git",
+    "musk @ git+https://github.com/lilab-stanford/MUSK",
+    "gigapath @ git+https://github.com/prov-gigapath/prov-gigapath.git",
+    "madeleine @ git+https://github.com/mahmoodlab/MADELEINE.git",
     "pylibCZIrw",
 ]
-omezarr = [
-    "ngff-zarr",
-    "dask",
-    "cf-units",
-    "zarr"
-]
+omezarr = ["ngff-zarr>=0.12", "dask>=2024.10", "cf-units>=3.1", "zarr>=3.0.0a0"]
 
-[tool.poetry.dev-dependencies]
-# Optional development dependencies 
-
-[tool.poetry.scripts]
+[project.scripts]
 trident = "trident.cli:main"
 run_batch_of_slides = "run_batch_of_slides:main"
 run_single_slide = "run_single_slide:main"
 trident-doctor = "trident.cli_doctor:main"
 
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=77,<81"]
+build-backend = "setuptools.build_meta"
 
-[tool.poetry.package]
-include = [
-    { format = "file", path = "trident/slide_encoder_models/local_ckpts.json" },
-    { format = "file", path = "trident/patch_encoder_models/local_ckpts.json" },
-    { format = "file", path = "trident/segmentation_models/local_ckpts.json" },
-]
-include_package_data = true
+[tool.setuptools]
+py-modules = ["run_batch_of_slides", "run_single_slide"]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["trident*"]
+
+[tool.setuptools.package-data]
+trident = ["**/*.json"]
